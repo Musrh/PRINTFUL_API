@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// 🔹 Firebase
+/* 🔹 Firebase */
 const serviceAccount = JSON.parse(
   process.env.FIREBASE_SERVICE_ACCOUNT_Printful
 );
@@ -24,20 +24,19 @@ const firebaseApp = admin.initializeApp(
 
 const db = firebaseApp.firestore();
 
-// 🔹 test serveur
+/* 🔹 Test serveur */
 app.get("/", (req, res) => {
   res.send("Printful backend running 🚀");
 });
 
 
-// 🔹 IMPORT PRODUITS PRINTFUL
+/* 🔹 IMPORT PRODUITS PRINTFUL + STOCKAGE FIRESTORE */
 app.get("/printful/import-products", async (req, res) => {
-
   try {
 
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
 
-    // récupérer liste produits
+    /* 1️⃣ récupérer liste produits */
     const response = await axios.get(
       "https://api.printful.com/store/products",
       {
@@ -53,6 +52,7 @@ app.get("/printful/import-products", async (req, res) => {
 
     for (const item of products) {
 
+      /* 2️⃣ récupérer détails produit */
       const details = await axios.get(
         `https://api.printful.com/store/products/${item.id}`,
         {
@@ -66,24 +66,24 @@ app.get("/printful/import-products", async (req, res) => {
 
       const variant = product.sync_variants?.[0];
 
-      // 💰 prix
+      /* 💰 prix */
       const price = variant?.retail_price
         ? parseFloat(variant.retail_price)
         : 0;
 
-      // 🖼 image principale
+      /* 🖼 IMAGE PRODUIT (MOCKUP) */
       const thumbnail =
-        variant?.product?.image ||
-        variant?.product?.thumbnail_url ||
-        variant?.files?.[0]?.preview_url ||
+        product.sync_product?.thumbnail_url ||
+        product.sync_product?.image ||
         null;
 
-      // 🖼 galerie images
-      const gallery = product.sync_variants
-        ?.map(v => v?.product?.image)
-        .filter(Boolean);
+      /* 🖼 galerie images */
+      const gallery =
+        product.sync_variants
+          ?.map(v => v?.product?.image)
+          .filter(Boolean) || [];
 
-      // 📄 description
+      /* 📄 description */
       const description =
         product.sync_product?.description ||
         "Produit premium imprimé à la demande.";
@@ -122,11 +122,12 @@ app.get("/printful/import-products", async (req, res) => {
       status: "error",
       message: err.message,
     });
+
   }
 });
 
 
-// 🔹 API PRODUITS POUR LE FRONTEND
+/* 🔹 API PRODUITS POUR LE FRONTEND */
 app.get("/printful/products", async (req, res) => {
 
   try {
@@ -137,7 +138,7 @@ app.get("/printful/products", async (req, res) => {
 
     const products = snapshot.docs.map(doc => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     }));
 
     res.json({ products });
@@ -149,12 +150,13 @@ app.get("/printful/products", async (req, res) => {
     res.status(500).json({
       products: [],
     });
+
   }
 
 });
 
 
-// 🔹 lancer serveur
+/* 🔹 Lancer serveur */
 app.listen(PORT, () => {
   console.log(`🚀 Printful backend running on port ${PORT}`);
 });
