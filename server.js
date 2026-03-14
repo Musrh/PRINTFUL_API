@@ -56,14 +56,16 @@ app.get("/import-printful", async (req, res) => {
         createdAt: new Date()
       };
 
-      await db.collection("products").doc(`printful_${p.id}`).set(product);
+      await db.collection("Printfulproducts")
+        .doc(`printful_${p.id}`)
+        .set(product);
 
       imported++;
 
     }
 
     res.json({
-      message: "Produits importés dans Firestore",
+      message: "Produits importés dans Printfulproducts",
       total: imported
     });
 
@@ -79,12 +81,12 @@ app.get("/import-printful", async (req, res) => {
 
 });
 
-/* 🔹 Lire les produits depuis Firestore */
-app.get("/products", async (req, res) => {
+/* 🔹 Lire produits Firestore */
+app.get("/printful-products", async (req, res) => {
 
   try {
 
-    const snapshot = await db.collection("products").get();
+    const snapshot = await db.collection("Printfulproducts").get();
 
     const products = snapshot.docs.map(doc => ({
       id: doc.id,
