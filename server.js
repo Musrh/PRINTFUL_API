@@ -25,7 +25,7 @@ app.use(express.json());
 
 // ----------------------------
 // Firebase
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+if (!process.env.FIREBASE_SERVICE_ACCOUNT_Printful) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT non défini !");
   process.exit(1);
 }
