@@ -1,84 +1,63 @@
-// server.js
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
-import admin from "firebase-admin";
 import dotenv from "dotenv";
+import admin from "firebase-admin";
+import axios from "axios";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// ----------------------------
-// CORS
-app.use(
-  cors({
-    origin: ["*"], // tu peux mettre ton front ici
-    methods: ["GET", "POST"],
-  })
-);
-
-// ----------------------------
-// JSON
+app.use(cors());
 app.use(express.json());
 
-// ----------------------------
-// Firebase
+// 🔹 Initialiser Firebase avec la nouvelle variable
 if (!process.env.FIREBASE_SERVICE_ACCOUNT_Printful) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT non défini !");
-  process.exit(1);
+  throw new Error("❌ FIREBASE_SERVICE_ACCOUNT_Printful non défini !");
 }
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+const serviceAccountPrintful = JSON.parse(
+  process.env.FIREBASE_SERVICE_ACCOUNT_Printful
+);
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+const firebaseAppPrintful = admin.initializeApp(
+  { credential: admin.credential.cert(serviceAccountPrintful) },
+  "printfulApp" // nom unique si tu veux avoir plusieurs apps
+);
+
+const dbPrintful = firebaseAppPrintful.firestore();
+
+// 🔹 Test route
+app.get("/", (req, res) => {
+  res.send("Printful backend is running 🚀");
 });
 
-const db = admin.firestore();
-
-// ----------------------------
-// Racine
-app.get("/", (req, res) => res.send("Printful Backend running 🚀"));
-
-// ----------------------------
-// Import produits Printful
-app.get("/printful/products", async (req, res) => {
-  const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY; // ta clé Printful
-  if (!PRINTFUL_API_KEY) return res.status(500).json({ error: "Printful API key missing" });
-
+// 🔹 Import produits Printful et stockage dans Firestore
+app.get("/import-printful-products", async (req, res) => {
   try {
-    const response = await fetch("https://api.printful.com/store/products", {
-      headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
-    });
-    const data = await response.json();
+    const response = await axios.get("https://api.printful.com/products"); 
+    const products = response.data.result; // dépend de l'API Printful
 
-    if (!data.result) return res.status(500).json({ error: "No products found" });
+    const batch = dbPrintful.batch();
 
-    // Stocker dans Firestore
-    const batch = db.batch();
-    data.result.forEach((item) => {
-      const ref = db.collection("PrintfulProducts").doc(item.id.toString());
+    products.forEach((item) => {
+      const ref = dbPrintful.collection("PrintfulProducts").doc(item.id.toString());
       batch.set(ref, {
-        id: item.id,
-        name: item.name,
-        description: item.sync_product?.variants?.[0]?.name || "",
-        retail_price: item.retail_price,
-        thumbnail: item.sync_product?.images?.[0]?.url || "",
-        external_id: item.external_id || "",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        nom: item.name,
+        description: item.description || "",
+        prix: item.retail_price || 0,
+        images: item.images || [],
+        source: "Printful",
       });
     });
+
     await batch.commit();
 
-    res.json({ status: "ok", count: data.result.length, result: data.result });
+    res.send({ status: "ok", message: products.length + " produits importés" });
   } catch (err) {
-    console.error("Erreur fetching Printful products:", err);
-    res.status(500).json({ error: err.message });
+    console.error("Import Printful error:", err.message);
+    res.status(500).send({ status: "error", message: err.message });
   }
 });
 
-// ----------------------------
-// Start server
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Printful backend running on port ${PORT}`));
