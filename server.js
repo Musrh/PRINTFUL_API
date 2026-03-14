@@ -1,12 +1,10 @@
+// server.js
 import express from "express";
 import cors from "cors";
-import admin from "firebase-admin";
 import fetch from "node-fetch";
-import dotenv from "dotenv";
+import admin from "firebase-admin";
 
-dotenv.config();
-
-// 🔹 Initialiser Firebase
+// 🔹 Firestore
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
@@ -15,57 +13,55 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// 🔹 Express
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔹 Route test
-app.get("/", (req, res) => res.send("Backend OK"));
-
-// 🔹 Route pour récupérer et stocker les produits Printful
-app.get("/printful/products", async (req, res) => {
+// 🔹 Endpoint pour synchroniser les produits Printful vers Firestore
+app.get("/printful/sync", async (req, res) => {
   try {
     const response = await fetch("https://api.printful.com/store/products", {
       headers: {
         Authorization: `Bearer ${process.env.PRINTFUL_API_KEY}`,
-        "Content-Type": "application/json",
       },
     });
 
     const data = await response.json();
+    const products = data.result || [];
 
-    if (!data.result) {
-      return res.status(500).json({ error: "Erreur récupération Printful" });
-    }
-
-    const products = data.result.map((p) => ({
-      id: p.id,
-      name: p.name,
-      thumbnail: p.files?.[0]?.preview_url || "",
-      description: p.description || "",
-      retail_price: p.retail_price?.toFixed(2) || "",
-      sync_variant_id: p.sync_variant_id || null,
-    }));
-
-    // 🔹 Stocker dans Firestore
     const batch = db.batch();
-    const collectionRef = db.collection("PrintfulProducts");
-
-    products.forEach((product) => {
-      const docRef = collectionRef.doc(product.id.toString());
-      batch.set(docRef, product, { merge: true });
+    products.forEach((p) => {
+      const docRef = db.collection("PrintfulProducts").doc(p.id.toString());
+      batch.set(docRef, {
+        id: p.id,
+        name: p.name,
+        description: p.description || "",
+        retail_price: p.retail_price || "",
+        thumbnail: p.thumbnail || "",
+        variants: p.variants || [],
+      });
     });
 
     await batch.commit();
 
-    res.json({ result: products });
+    res.json({ success: true, count: products.length });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erreur serveur" });
+    console.error("Erreur sync Printful:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// 🔹 Lancer le serveur
+// 🔹 Endpoint pour récupérer les produits depuis Firestore
+app.get("/printful/products", async (req, res) => {
+  try {
+    const snapshot = await db.collection("PrintfulProducts").get();
+    const products = snapshot.docs.map((doc) => doc.data());
+    res.json({ result: products });
+  } catch (err) {
+    console.error("Erreur fetch Firestore:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Printful backend running on port ${PORT}`));
