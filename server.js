@@ -83,7 +83,7 @@ app.get("/import-printful", async (req, res) => {
 
       const variant = p.variants && p.variants[0] ? p.variants[0] : {};
 
-      await db.collection("products").doc(`printful_${p.id}`).set({
+      await db.collection("Printfulproducts").doc(`printful_${p.id}`).set({
 
         name: p.name,
         image: p.thumbnail_url,
