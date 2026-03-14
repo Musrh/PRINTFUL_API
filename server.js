@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
@@ -18,14 +17,14 @@ const serviceAccountPrintful = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_P
 
 const appPrintful = admin.initializeApp(
   { credential: admin.credential.cert(serviceAccountPrintful) },
-  "printfulApp" // nom unique pour éviter conflit
+  "printfulApp" // nom unique
 );
 const dbPrintful = appPrintful.firestore();
 
 // 🔹 Racine
 app.get("/", (req, res) => res.send("Printful backend is running 🚀"));
 
-// 🔹 Import produits Printful
+// 🔹 Import produits Printful et stockage Firestore
 app.get("/printful/import-products", async (req, res) => {
   try {
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
@@ -39,35 +38,27 @@ app.get("/printful/import-products", async (req, res) => {
     products.forEach((item) => {
       const ref = dbPrintful.collection("PrintfulProducts").doc(item.id.toString());
 
-      // 🔹 Image : d'abord item.files, sinon variant.files
+      // Nom
+      const name = item.name || "Nom non disponible";
+
+      // Description
+      const description = item.description || "Description non disponible";
+
+      // Image : on prend la première disponible dans files ou null
       let thumbnail = null;
-      if (item.files?.length) thumbnail = item.files[0].preview_url;
-      else if (item.variants?.length) {
-        const v = item.variants.find(v => v.files?.length);
-        if (v) thumbnail = v.files[0].preview_url;
+      if (item.files && item.files.length > 0) {
+        const file = item.files.find((f) => f.type === "preview" || f.type === "image");
+        thumbnail = file ? file.preview_url || file.url : null;
       }
 
-      // 🔹 Prix : premier variant avec retail_price > 0
+      // Prix : on cherche le premier variant avec retail_price > 0
       let price = 0;
-      if (item.variants?.length) {
-        const validVariant = item.variants.find(v => v.retail_price && parseFloat(v.retail_price) > 0);
-        if (validVariant) price = parseFloat(validVariant.retail_price);
+      if (item.variants && item.variants.length > 0) {
+        const variantWithPrice = item.variants.find((v) => v.retail_price && parseFloat(v.retail_price) > 0);
+        price = variantWithPrice ? parseFloat(variantWithPrice.retail_price) : 0;
       }
 
-      // 🔹 Description : description ou concat des variant_name
-      let description = item.description || "";
-      if (!description && item.variants?.length) {
-        description = item.variants.map(v => v.variant_name).filter(Boolean).join(", ");
-      }
-      if (!description) description = "Description non disponible";
-
-      batch.set(ref, {
-        name: item.name || "Nom non disponible",
-        description,
-        price,
-        thumbnail,
-        source: "Printful",
-      });
+      batch.set(ref, { name, description, price, thumbnail, source: "Printful" });
     });
 
     await batch.commit();
@@ -82,7 +73,7 @@ app.get("/printful/import-products", async (req, res) => {
 app.get("/printful/products", async (req, res) => {
   try {
     const snapshot = await dbPrintful.collection("PrintfulProducts").get();
-    const products = snapshot.docs.map(doc => doc.data());
+    const products = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     res.json({ products });
   } catch (err) {
     console.error("Erreur fetching Printful products:", err.message);
