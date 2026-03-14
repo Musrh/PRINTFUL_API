@@ -1,29 +1,69 @@
-// server.js
 import express from "express";
-import fetch from "node-fetch"; // ou 'undici' si Node 18+
 import cors from "cors";
+import fetch from "node-fetch";
 import dotenv from "dotenv";
+
 dotenv.config();
 
 const app = express();
-app.use(cors()); // pour que Vue puisse faire fetch
+app.use(cors());
 
-// Route pour récupérer les produits Printful
+const PORT = process.env.PORT || 3000;
+
+// 🔹 Route pour récupérer les produits Printful
 app.get("/printful/products", async (req, res) => {
   try {
+
     const response = await fetch("https://api.printful.com/store/products", {
       headers: {
-        Authorization: `Bearer ${process.env.PRINTFUL_API_KEY}`,
-      },
+        Authorization: `Bearer ${process.env.PRINTFUL_API_KEY}`
+      }
     });
+
     const data = await response.json();
-    res.json(data); // renvoie le JSON complet à ton frontend
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+
+    // Transformation des produits
+    const products = (data.result || []).map((p) => {
+
+      const variant = p.variants && p.variants.length > 0 ? p.variants[0] : {};
+
+      return {
+        id: p.id,
+        name: p.name,
+
+        // image
+        thumbnail_url:
+          p.thumbnail_url ||
+          (variant.files && variant.files[0]
+            ? variant.files[0].preview_url
+            : ""),
+
+        // description
+        description:
+          p.description ||
+          "Produit premium imprimé à la demande",
+
+        // prix
+        retail_price:
+          variant.retail_price ||
+          variant.price ||
+          "0"
+      };
+
+    });
+
+    res.json({ result: products });
+
+  } catch (error) {
+
+    console.error("Erreur Printful:", error);
+    res.status(500).json({
+      error: "Impossible de récupérer les produits Printful"
+    });
+
   }
 });
 
-// Lancement du serveur
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Serveur démarré sur port ${PORT}`);
+});
