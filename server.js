@@ -10,92 +10,75 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ----------------------------
-// Middlewares
 app.use(cors());
 app.use(express.json());
 
-// ----------------------------
-// Firebase Printful
-if (!process.env.FIREBASE_SERVICE_ACCOUNT_Printful) {
-  throw new Error("❌ FIREBASE_SERVICE_ACCOUNT_Printful non défini !");
-}
-
+// 🔹 Firebase Printful
 const serviceAccountPrintful = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_Printful);
 
 const appPrintful = admin.initializeApp(
   { credential: admin.credential.cert(serviceAccountPrintful) },
-  "printfulApp" // nom unique pour éviter conflit avec autre backend
+  "printfulApp"
 );
-
 const dbPrintful = appPrintful.firestore();
 
-// ----------------------------
-// Racine
+// 🔹 Racine
 app.get("/", (req, res) => res.send("Printful backend is running 🚀"));
 
-// ----------------------------
-// Import produits Printful et stockage dans Firestore
+// 🔹 Import produits Printful et stockage dans Firestore
 app.get("/printful/import-products", async (req, res) => {
   try {
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
-    if (!PRINTFUL_API_KEY) throw new Error("PRINTFUL_API_KEY non défini");
-
     const response = await axios.get("https://api.printful.com/store/products", {
       headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
     });
 
     const products = response.data.result || [];
 
-    if (products.length === 0) {
-      return res.send({ status: "ok", message: "Aucun produit Printful trouvé" });
-    }
-
     const batch = dbPrintful.batch();
 
     products.forEach((item) => {
       const ref = dbPrintful.collection("PrintfulProducts").doc(item.id.toString());
 
+      // 🔹 Récupération nom et description
       const name = item.name || "Nom non disponible";
       const description = item.description || "Description non disponible";
 
-      // Gestion des images
+      // 🔹 Récupération image principale
       let thumbnail = null;
       if (item.files && item.files.length > 0) {
-        const fileImg = item.files.find((f) => f.type === "preview" || f.type === "image");
-        thumbnail = fileImg ? fileImg.preview_url : item.files[0].preview_url;
+        // On prend la première image avec preview_url ou thumbnail_url
+        const file = item.files.find(f => f.type === "preview") || item.files[0];
+        thumbnail = file.preview_url || file.thumbnail_url || null;
       }
 
-      // Prix du premier variant
-      const price =
-        item.variants && item.variants.length > 0
-          ? parseFloat(item.variants[0].retail_price) || 0
-          : 0;
+      // 🔹 Récupération prix : premier variant
+      let price = 0;
+      if (item.variants && item.variants.length > 0) {
+        const variant = item.variants[0];
+        price = parseFloat(variant.retail_price) || 0;
+      }
 
       batch.set(ref, {
-        id: item.id.toString(),
+        id: item.id,
         name,
         description,
         price,
         thumbnail,
         source: "Printful",
-        variants: item.variants || [],
-        sync_date: admin.firestore.FieldValue.serverTimestamp(),
       });
     });
 
     await batch.commit();
 
-    res.send({ status: "ok", message: `${products.length} produits importés` });
-    console.log(`✅ ${products.length} produits Printful importés dans Firestore`);
+    res.json({ status: "ok", message: `${products.length} produits importés` });
   } catch (err) {
     console.error("Erreur import Printful:", err.message);
-    res.status(500).send({ status: "error", message: err.message });
+    res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-// ----------------------------
-// Récupérer produits pour le front-end
+// 🔹 Récupérer produits pour le front
 app.get("/printful/products", async (req, res) => {
   try {
     const snapshot = await dbPrintful.collection("PrintfulProducts").get();
@@ -107,6 +90,5 @@ app.get("/printful/products", async (req, res) => {
   }
 });
 
-// ----------------------------
-// Start server
+// 🔹 Lancement du serveur
 app.listen(PORT, () => console.log(`🚀 Printful backend running on port ${PORT}`));
