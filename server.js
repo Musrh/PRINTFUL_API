@@ -10,15 +10,15 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🔹 Middlewares
 app.use(cors());
 app.use(express.json());
 
-// 🔹 Firebase Printful
+// 🔹 Firebase Printful (app séparée)
 const serviceAccountPrintful = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_Printful);
+
 const appPrintful = admin.initializeApp(
   { credential: admin.credential.cert(serviceAccountPrintful) },
-  "printfulApp" // nom unique pour éviter conflit avec d'autres apps
+  "printfulApp" // nom unique pour éviter conflit
 );
 const dbPrintful = appPrintful.firestore();
 
@@ -39,23 +39,24 @@ app.get("/printful/import-products", async (req, res) => {
     products.forEach((item) => {
       const ref = dbPrintful.collection("PrintfulProducts").doc(item.id.toString());
 
-      // Image : première disponible, fallback sur type "default"
-      const thumbnail =
-        item.files?.[0]?.preview_url ||
-        item.files?.find((f) => f.type === "default")?.preview_url ||
-        null;
+      // Image
+      let thumbnail = null;
+      if (item.files?.length) thumbnail = item.files[0].preview_url;
+      else if (item.variants?.length) {
+        const v = item.variants.find(v => v.files?.length);
+        if (v) thumbnail = v.files[0].preview_url;
+      }
 
-      // Prix : premier variant disponible
+      // Prix
       let price = 0;
-      if (item.variants?.length > 0) {
-        price = parseFloat(item.variants[0].retail_price || 0);
+      if (item.variants?.length) {
+        const v = item.variants.find(v => parseFloat(v.retail_price) > 0);
+        if (v) price = parseFloat(v.retail_price);
       }
 
-      // Description : fallback sur variante si nécessaire
+      // Description
       let description = item.description || "";
-      if (!description && item.variants?.length > 0) {
-        description = item.variants[0].variant_name || "Description non disponible";
-      }
+      if (!description && item.variants?.length) description = item.variants[0].variant_name || "";
       if (!description) description = "Description non disponible";
 
       batch.set(ref, {
@@ -88,5 +89,4 @@ app.get("/printful/products", async (req, res) => {
   }
 });
 
-// 🔹 Start server
 app.listen(PORT, () => console.log(`🚀 Printful backend running on port ${PORT}`));
