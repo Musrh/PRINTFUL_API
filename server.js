@@ -1,4 +1,4 @@
-// server.js pour Printful - complet et sécurisé
+// server.js pour Printful - mockups + variantes complètes
 import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
@@ -52,18 +52,19 @@ app.get("/printful/import-products", async (req, res) => {
 
       // 🔹 Créer les variantes
       const variants = (product.sync_variants || []).map((v) => {
-        const options = v.options || [];
+        // options disponibles pour cette variante
+        const options = v.options || v.product?.options || [];
 
-        // Couleur : si absente → "N/A"
+        // couleur / taille avec fallback
         const color =
           options.find((o) => o?.name?.toLowerCase().includes("color"))?.value ||
           "N/A";
 
-        // Taille : si absente → on laisse vide (afficher rien)
         const size =
-          options.find((o) => o?.name?.toLowerCase().includes("size"))?.value || "";
+          options.find((o) => o?.name?.toLowerCase().includes("size"))?.value ||
+          "N/A";
 
-        // Mockup avec design
+        // mockup spécifique à la variante si disponible
         const thumbnail =
           v.files?.find((f) => f.type === "preview")?.preview_url ||
           v.files?.[0]?.preview_url ||
@@ -79,10 +80,13 @@ app.get("/printful/import-products", async (req, res) => {
         };
       });
 
-      // 🔹 prix global (prix de la première variante)
+      // 🔹 Prix global (première variante)
       const price = variants[0]?.price || 0;
 
-      // 🔹 description
+      // 🔹 Mockup principal du produit
+      const mainThumbnail = variants[0]?.thumbnail || null;
+
+      // 🔹 Description
       const description = product.sync_product?.description || "Description non disponible";
 
       const productData = {
@@ -90,7 +94,7 @@ app.get("/printful/import-products", async (req, res) => {
         name: item.name,
         description,
         price,
-        thumbnail: variants[0]?.thumbnail || null,
+        thumbnail: mainThumbnail,
         variants,
         source: "Printful",
         syncDate: admin.firestore.FieldValue.serverTimestamp(),
