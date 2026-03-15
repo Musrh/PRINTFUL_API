@@ -13,9 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🔹 Firebase
-const serviceAccount = JSON.parse(
-  process.env.FIREBASE_SERVICE_ACCOUNT_Printful
-);
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_Printful);
 
 const firebaseApp = admin.initializeApp(
   { credential: admin.credential.cert(serviceAccount) },
@@ -34,38 +32,42 @@ app.get("/printful/import-products", async (req, res) => {
   try {
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
 
-    // 1️⃣ récupérer la liste produits
-    const response = await axios.get(
-      "https://api.printful.com/store/products",
-      { headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` } }
-    );
+    // 1️⃣ Récupérer liste produits
+    const response = await axios.get("https://api.printful.com/store/products", {
+      headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+    });
 
     const products = response.data.result || [];
     const batch = db.batch();
 
-    // 2️⃣ récupérer les détails de chaque produit
+    // 2️⃣ Récupérer détails de chaque produit
     for (const item of products) {
-      const details = await axios.get(
-        `https://api.printful.com/store/products/${item.id}`,
-        { headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` } }
-      );
+      const details = await axios.get(`https://api.printful.com/store/products/${item.id}`, {
+        headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+      });
 
       const product = details.data.result;
 
-      // 🔹 récupérer toutes les variantes avec couleur, taille, prix et mockup avec design
-      const variants = product.sync_variants?.map((v) => ({
-        id: v.id,
-        color: v.product?.options?.find(o => o.type === "color")?.value || "N/A",
-        size: v.product?.options?.find(o => o.type === "size")?.value || "N/A",
-        price: v.retail_price ? parseFloat(v.retail_price) : 0,
-        thumbnail: v.files?.[0]?.preview_url || v.files?.[0]?.url || null,
-      })) || [];
+      // 🔹 Récupérer toutes les variantes avec couleur, taille, prix et mockup avec design
+      const variants = product.sync_variants?.map((v) => {
+        const color = v.options?.find(o => o.type === "color")?.value || "N/A";
+        const size  = v.options?.find(o => o.type === "size")?.value || "N/A";
 
+        return {
+          id: v.id,
+          color,
+          size,
+          price: v.retail_price ? parseFloat(v.retail_price) : 0,
+          thumbnail: v.files?.[0]?.preview_url || v.files?.[0]?.url || null,
+        };
+      }) || [];
+
+      // 🔹 Produit principal
       const productData = {
         id: item.id,
         name: item.name,
         description: product.sync_product?.description || "Description non disponible",
-        price: variants[0]?.price || 0,         // prix principal
+        price: variants[0]?.price || 0,
         thumbnail: variants[0]?.thumbnail || null, // mockup principal
         variants,
         source: "Printful",
