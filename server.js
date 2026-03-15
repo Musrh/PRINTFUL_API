@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
@@ -18,43 +19,56 @@ const serviceAccount = JSON.parse(
 );
 
 const firebaseApp = admin.initializeApp(
-  { credential: admin.credential.cert(serviceAccount) },
+  {
+    credential: admin.credential.cert(serviceAccount),
+  },
   "printfulApp"
 );
 
 const db = firebaseApp.firestore();
+
 
 // 🔹 Test serveur
 app.get("/", (req, res) => {
   res.send("Printful backend running 🚀");
 });
 
-// 🔹 Import produits Printful + stockage Firestore
+
+// 🔹 IMPORT PRODUITS PRINTFUL + STOCKAGE FIRESTORE
 app.get("/printful/import-products", async (req, res) => {
   try {
+
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
 
     // 1️⃣ récupérer la liste produits
     const response = await axios.get(
       "https://api.printful.com/store/products",
       {
-        headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+        headers: {
+          Authorization: `Bearer ${PRINTFUL_API_KEY}`,
+        },
       }
     );
 
     const products = response.data.result || [];
+
     const batch = db.batch();
 
+    // 2️⃣ récupérer les détails de chaque produit
     for (const item of products) {
-      // 2️⃣ récupérer détails produit
+
       const details = await axios.get(
         `https://api.printful.com/store/products/${item.id}`,
         {
-          headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+          headers: {
+            Authorization: `Bearer ${PRINTFUL_API_KEY}`,
+          },
         }
       );
 
       const product = details.data.result;
+
+      // première variante
       const variant = product.sync_variants?.[0];
 
       // 🔹 prix
@@ -62,16 +76,16 @@ app.get("/printful/import-products", async (req, res) => {
         ? parseFloat(variant.retail_price)
         : 0;
 
-      // 🔹 mockup image : d’abord type mockup, fallback preview
-      const mockupFile =
-        variant?.files?.find((f) => f.type === "mockup") ||
-        variant?.files?.find((f) => f.type === "preview");
-
-      const thumbnail = mockupFile?.preview_url || mockupFile?.url || null;
+      // 🔹 mockup produit (vrai t-shirt avec design)
+      const thumbnail =
+        variant?.product?.image ||
+        product?.sync_product?.thumbnail_url ||
+        null;
 
       // 🔹 description
       const description =
-        product.sync_product?.description || "Description non disponible";
+        product?.sync_product?.description ||
+        "Description non disponible";
 
       const productData = {
         id: item.id,
@@ -84,30 +98,57 @@ app.get("/printful/import-products", async (req, res) => {
         syncDate: admin.firestore.FieldValue.serverTimestamp(),
       };
 
-      const ref = db.collection("PrintfulProducts").doc(item.id.toString());
+      const ref = db
+        .collection("PrintfulProducts")
+        .doc(item.id.toString());
+
       batch.set(ref, productData);
     }
 
     await batch.commit();
 
-    res.json({ status: "ok", message: `${products.length} produits importés` });
+    res.json({
+      status: "ok",
+      message: `${products.length} produits importés`,
+    });
+
   } catch (err) {
+
     console.error("Erreur import Printful:", err.message);
-    res.status(500).json({ status: "error", message: err.message });
+
+    res.status(500).json({
+      status: "error",
+      message: err.message,
+    });
   }
 });
 
-// 🔹 API produits pour le front-end
+
+// 🔹 API PRODUITS POUR LE FRONTEND
 app.get("/printful/products", async (req, res) => {
   try {
-    const snapshot = await db.collection("PrintfulProducts").get();
-    const products = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+
+    const snapshot = await db
+      .collection("PrintfulProducts")
+      .get();
+
+    const products = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
     res.json({ products });
+
   } catch (err) {
+
     console.error("Erreur récupération produits:", err.message);
-    res.status(500).json({ products: [] });
+
+    res.status(500).json({
+      products: [],
+    });
   }
 });
+
 
 // 🔹 Lancer serveur
 app.listen(PORT, () => {
