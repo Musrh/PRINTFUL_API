@@ -33,7 +33,6 @@ app.get("/printful/import-products", async (req, res) => {
   try {
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
 
-    // 1️⃣ Récupérer la liste des produits
     const response = await axios.get("https://api.printful.com/store/products", {
       headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
     });
@@ -41,20 +40,17 @@ app.get("/printful/import-products", async (req, res) => {
     const products = response.data.result || [];
     const batch = db.batch();
 
-    // 2️⃣ Récupérer les détails de chaque produit
     for (const item of products) {
       const details = await axios.get(
         `https://api.printful.com/store/products/${item.id}`,
-        {
-          headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
-        }
+        { headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` } }
       );
 
       const product = details.data.result;
 
-      // 🔹 Créer les variantes avec fallback sécurisé
+      // 🔹 Créer les variantes avec couleurs et tailles
       const variants = (product.sync_variants || []).map((v) => {
-        const options = v.options || v.product?.options || [];
+        const options = v.options || [];
 
         const color =
           options.find((o) => o?.name?.toLowerCase().includes("color"))?.value ||
@@ -64,7 +60,7 @@ app.get("/printful/import-products", async (req, res) => {
           options.find((o) => o?.name?.toLowerCase().includes("size"))?.value ||
           "N/A";
 
-        // 🔹 mockup avec design
+        // 🔹 mockup avec design (preview si disponible)
         const thumbnail =
           v.files?.find((f) => f.type === "preview")?.preview_url ||
           v.files?.[0]?.preview_url ||
@@ -80,10 +76,10 @@ app.get("/printful/import-products", async (req, res) => {
         };
       });
 
-      // 🔹 prix global (prix de la première variante)
+      // 🔹 prix global = prix de la première variante
       const price = variants[0]?.price || 0;
 
-      // 🔹 description
+      // 🔹 description produit
       const description = product.sync_product?.description || "Description non disponible";
 
       const productData = {
