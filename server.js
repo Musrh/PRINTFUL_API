@@ -1,4 +1,3 @@
-// server.js pour Printful complet corrigé
 import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
@@ -35,7 +34,7 @@ app.get("/printful/import-products", async (req, res) => {
   try {
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
 
-    // 1️⃣ récupérer la liste des produits
+    // 1️⃣ récupérer la liste produits
     const response = await axios.get(
       "https://api.printful.com/store/products",
       { headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` } }
@@ -53,40 +52,21 @@ app.get("/printful/import-products", async (req, res) => {
 
       const product = details.data.result;
 
-      // 🔹 parcourir toutes les variantes
-      const variants = product.sync_variants?.map(variant => {
-        // récupérer le mockup avec design si disponible
-        const files = variant.files || [];
-        const preview = files.find(f => f.type === "preview");
-        const mockup = files.find(f => f.type === "mockup");
-
-        const thumbnail =
-          preview?.preview_url ||
-          mockup?.preview_url ||
-          preview?.url ||
-          mockup?.url ||
-          variant?.product?.image ||
-          null;
-
-        return {
-          id: variant.id,
-          color: variant?.options?.find(o => o.name === "Color")?.value || "Default",
-          size: variant?.options?.find(o => o.name === "Size")?.value || "One size",
-          price: variant.retail_price ? parseFloat(variant.retail_price) : 0,
-          sku: variant?.sku || null,
-          thumbnail,
-        };
-      }) || [];
-
-      // 🔹 description fallback
-      const description = product?.sync_product?.description || "Description non disponible";
+      // 🔹 récupérer toutes les variantes avec couleur, taille, prix et mockup avec design
+      const variants = product.sync_variants?.map((v) => ({
+        id: v.id,
+        color: v.product?.options?.find(o => o.type === "color")?.value || "N/A",
+        size: v.product?.options?.find(o => o.type === "size")?.value || "N/A",
+        price: v.retail_price ? parseFloat(v.retail_price) : 0,
+        thumbnail: v.files?.[0]?.preview_url || v.files?.[0]?.url || null,
+      })) || [];
 
       const productData = {
         id: item.id,
         name: item.name,
-        description,
-        price: variants[0]?.price || 0, // prix par défaut = première variante
-        thumbnail: variants[0]?.thumbnail || null, // image par défaut = première variante
+        description: product.sync_product?.description || "Description non disponible",
+        price: variants[0]?.price || 0,         // prix principal
+        thumbnail: variants[0]?.thumbnail || null, // mockup principal
         variants,
         source: "Printful",
         syncDate: admin.firestore.FieldValue.serverTimestamp(),
@@ -98,17 +78,10 @@ app.get("/printful/import-products", async (req, res) => {
 
     await batch.commit();
 
-    res.json({
-      status: "ok",
-      message: `${products.length} produits importés`,
-    });
-
+    res.json({ status: "ok", message: `${products.length} produits importés` });
   } catch (err) {
     console.error("Erreur import Printful:", err.message);
-    res.status(500).json({
-      status: "error",
-      message: err.message,
-    });
+    res.status(500).json({ status: "error", message: err.message });
   }
 });
 
@@ -116,11 +89,7 @@ app.get("/printful/import-products", async (req, res) => {
 app.get("/printful/products", async (req, res) => {
   try {
     const snapshot = await db.collection("PrintfulProducts").get();
-    const products = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-
+    const products = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     res.json({ products });
   } catch (err) {
     console.error("Erreur récupération produits:", err.message);
