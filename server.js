@@ -16,7 +16,9 @@ app.use(express.json());
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_Printful);
 
 const firebaseApp = admin.initializeApp(
-  { credential: admin.credential.cert(serviceAccount) },
+  {
+    credential: admin.credential.cert(serviceAccount),
+  },
   "printfulApp"
 );
 
@@ -32,7 +34,7 @@ app.get("/printful/import-products", async (req, res) => {
   try {
     const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
 
-    // 1️⃣ Récupérer liste produits
+    // 1️⃣ récupérer la liste produits
     const response = await axios.get("https://api.printful.com/store/products", {
       headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
     });
@@ -41,22 +43,23 @@ app.get("/printful/import-products", async (req, res) => {
     const batch = db.batch();
 
     for (const item of products) {
-      // 2️⃣ Détails de chaque produit
+      // 2️⃣ récupérer les détails de chaque produit
       const details = await axios.get(`https://api.printful.com/store/products/${item.id}`, {
         headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
       });
 
       const product = details.data.result;
 
-      // 🔹 Variantes avec couleurs, tailles, prix et mockup avec design
+      // 🔹 toutes les variantes
       const variants = product.sync_variants?.map((v) => {
         const color = v.options?.find(o => o.type === "color")?.value || "N/A";
-        const size  = v.options?.find(o => o.type === "size")?.value || "N/A";
+        const size = v.options?.find(o => o.type === "size")?.value || "N/A";
 
-        // 🔹 Chercher mockup avec design
-        const thumbnail = v.files?.find(f => f.type === "preview")?.preview_url || 
-                          v.files?.[0]?.preview_url ||
-                          null;
+        // mockup avec design pour chaque variante
+        const thumbnail =
+          v.files?.find(f => f.type === "preview")?.preview_url ||
+          v.files?.[0]?.preview_url ||
+          null;
 
         return {
           id: v.id,
@@ -67,13 +70,13 @@ app.get("/printful/import-products", async (req, res) => {
         };
       }) || [];
 
-      // 🔹 Produit principal
+      // 🔹 produit principal
       const productData = {
         id: item.id,
         name: item.name,
         description: product.sync_product?.description || "Description non disponible",
-        price: variants[0]?.price || 0,
-        thumbnail: variants[0]?.thumbnail || null, // mockup principal
+        price: variants[0]?.price || 0, // prix de la première variante
+        thumbnail: variants[0]?.thumbnail || null, // mockup principal avec design
         variants,
         source: "Printful",
         syncDate: admin.firestore.FieldValue.serverTimestamp(),
@@ -86,7 +89,6 @@ app.get("/printful/import-products", async (req, res) => {
     await batch.commit();
 
     res.json({ status: "ok", message: `${products.length} produits importés` });
-
   } catch (err) {
     console.error("Erreur import Printful:", err.message);
     res.status(500).json({ status: "error", message: err.message });
