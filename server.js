@@ -45,40 +45,62 @@ app.get("/printful/import-products", async (req, res) => {
     for (const item of products) {
       const details = await axios.get(
         `https://api.printful.com/store/products/${item.id}`,
-        { headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` } }
+        {
+          headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+        }
       );
 
       const product = details.data.result;
 
-      // 🔹 Créer les tailles disponibles à partir des variantes
-      const sizesSet = new Set();
-      (product.sync_variants || []).forEach((v) => {
-        if (v.size && v.size !== "") sizesSet.add(v.size);
+      // 🔹 Créer les variantes avec taille, couleur et image mockup
+      const variants = (product.sync_variants || []).map((v) => {
+        const options = v.options || v.product?.options || [];
+
+        const color =
+          options.find((o) => o?.name?.toLowerCase().includes("color"))?.value ||
+          "N/A";
+
+        const size =
+          options.find((o) => o?.name?.toLowerCase().includes("size"))?.value ||
+          "N/A";
+
+        const thumbnail =
+          v.files?.find((f) => f.type === "preview")?.preview_url ||
+          v.files?.[0]?.preview_url ||
+          product.sync_product?.thumbnail_url ||
+          null;
+
+        return {
+          id: v.id,
+          color,
+          size,
+          price: v.retail_price ? parseFloat(v.retail_price) : 0,
+          thumbnail,
+        };
       });
-      const availableSizes = Array.from(sizesSet).sort();
 
-      // 🔹 Prix global (première variante)
-      const price = product.sync_variants?.[0]?.retail_price
-        ? parseFloat(product.sync_variants[0].retail_price)
-        : 0;
+      // 🔹 Listes uniques globales de tailles et couleurs
+      const availableSizes = [
+        ...new Set(variants.map((v) => v.size).filter((s) => s && s !== "N/A")),
+      ];
+      const availableColors = [
+        ...new Set(variants.map((v) => v.color).filter((c) => c && c !== "N/A")),
+      ];
 
-      // 🔹 Mockup principal avec design
-      const thumbnail =
-        product.sync_variants?.[0]?.files?.find((f) => f.type === "product")?.preview_url ||
-        product.sync_product?.thumbnail_url ||
-        null;
+      // 🔹 Prix global = prix de la première variante
+      const price = variants[0]?.price || 0;
 
-      // 🔹 Description
       const description = product.sync_product?.description || "Description non disponible";
 
-      // 🔹 Créer l'objet produit
       const productData = {
         id: item.id,
         name: item.name,
         description,
         price,
-        thumbnail,
+        thumbnail: variants[0]?.thumbnail || null,
+        variants,
         availableSizes,
+        availableColors,
         source: "Printful",
         syncDate: admin.firestore.FieldValue.serverTimestamp(),
       };
