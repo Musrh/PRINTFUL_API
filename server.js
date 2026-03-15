@@ -1,4 +1,4 @@
-// server.js pour Printful complet et sécurisé
+// server.js pour Printful complet et sécurisé avec variantes, tailles et couleurs
 import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
@@ -45,25 +45,28 @@ app.get("/printful/import-products", async (req, res) => {
     for (const item of products) {
       const details = await axios.get(
         `https://api.printful.com/store/products/${item.id}`,
-        {
-          headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
-        }
+        { headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` } }
       );
 
       const product = details.data.result;
 
-      // 🔹 Créer les variantes avec taille, couleur et image mockup
+      // 🔹 Créer les variantes avec tailles et couleurs
       const variants = (product.sync_variants || []).map((v) => {
-        const options = v.options || v.product?.options || [];
+        // Récupérer les options depuis Printful
+        const options = v.options || [];
 
-        const color =
-          options.find((o) => o?.name?.toLowerCase().includes("color"))?.value ||
-          "N/A";
+        // Taille et couleur
+        let size = options.find((o) => o.name.toLowerCase().includes("size"))?.value || "";
+        let color = options.find((o) => o.name.toLowerCase().includes("color"))?.value || "N/A";
 
-        const size =
-          options.find((o) => o?.name?.toLowerCase().includes("size"))?.value ||
-          "N/A";
+        // Fallback depuis le nom de la variante
+        if (!size || size === "") {
+          const parts = v.name?.split(" / ") || [];
+          if (parts.length >= 2) size = parts[1] || "";
+          if (parts.length >= 3) color = parts[2] || color;
+        }
 
+        // Mockup spécifique à la variante (avec design)
         const thumbnail =
           v.files?.find((f) => f.type === "preview")?.preview_url ||
           v.files?.[0]?.preview_url ||
@@ -72,24 +75,24 @@ app.get("/printful/import-products", async (req, res) => {
 
         return {
           id: v.id,
-          color,
           size,
+          color,
           price: v.retail_price ? parseFloat(v.retail_price) : 0,
           thumbnail,
         };
       });
 
-      // 🔹 Listes uniques globales de tailles et couleurs
-      const availableSizes = [
-        ...new Set(variants.map((v) => v.size).filter((s) => s && s !== "N/A")),
-      ];
-      const availableColors = [
-        ...new Set(variants.map((v) => v.color).filter((c) => c && c !== "N/A")),
-      ];
+      // 🔹 Listes uniques de tailles et couleurs
+      const availableSizes = [...new Set(variants.map((v) => v.size).filter((s) => s))].sort();
+      const availableColors = [...new Set(variants.map((v) => v.color).filter((c) => c && c !== "N/A"))];
 
-      // 🔹 Prix global = prix de la première variante
+      // 🔹 Prix global (première variante)
       const price = variants[0]?.price || 0;
 
+      // 🔹 Mockup principal (première variante)
+      const thumbnail = variants[0]?.thumbnail || null;
+
+      // 🔹 Description
       const description = product.sync_product?.description || "Description non disponible";
 
       const productData = {
@@ -97,10 +100,10 @@ app.get("/printful/import-products", async (req, res) => {
         name: item.name,
         description,
         price,
-        thumbnail: variants[0]?.thumbnail || null,
-        variants,
+        thumbnail,
         availableSizes,
         availableColors,
+        variants,
         source: "Printful",
         syncDate: admin.firestore.FieldValue.serverTimestamp(),
       };
