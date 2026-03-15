@@ -40,25 +40,30 @@ app.get("/printful/import-products", async (req, res) => {
     const products = response.data.result || [];
     const batch = db.batch();
 
-    // 2️⃣ Récupérer détails de chaque produit
     for (const item of products) {
+      // 2️⃣ Détails de chaque produit
       const details = await axios.get(`https://api.printful.com/store/products/${item.id}`, {
         headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
       });
 
       const product = details.data.result;
 
-      // 🔹 Récupérer toutes les variantes avec couleur, taille, prix et mockup avec design
+      // 🔹 Variantes avec couleurs, tailles, prix et mockup avec design
       const variants = product.sync_variants?.map((v) => {
         const color = v.options?.find(o => o.type === "color")?.value || "N/A";
         const size  = v.options?.find(o => o.type === "size")?.value || "N/A";
+
+        // 🔹 Chercher mockup avec design
+        const thumbnail = v.files?.find(f => f.type === "preview")?.preview_url || 
+                          v.files?.[0]?.preview_url ||
+                          null;
 
         return {
           id: v.id,
           color,
           size,
           price: v.retail_price ? parseFloat(v.retail_price) : 0,
-          thumbnail: v.files?.[0]?.preview_url || v.files?.[0]?.url || null,
+          thumbnail,
         };
       }) || [];
 
@@ -81,6 +86,7 @@ app.get("/printful/import-products", async (req, res) => {
     await batch.commit();
 
     res.json({ status: "ok", message: `${products.length} produits importés` });
+
   } catch (err) {
     console.error("Erreur import Printful:", err.message);
     res.status(500).json({ status: "error", message: err.message });
