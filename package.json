@@ -1,7 +1,7 @@
 {
   "name": "backend-wellshoppings",
   "version": "1.0.0",
-  "description": "Backend pour WellShoppings - Stripe, PayPal, Firebase, Printful",
+  "description": "Backend Stripe + PayPal + Printful + Firestore",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -16,7 +16,7 @@
     "dotenv": "^16.3.1",
     "stripe": "^14.13.0",
     "@paypal/checkout-server-sdk": "^1.0.3",
-    "firebase-admin": "^12.13.0",
+    "firebase-admin": "^12.4.0",
     "axios": "^1.6.1",
     "helmet": "^7.0.0"
   }
