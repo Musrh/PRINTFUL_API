@@ -9,23 +9,26 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 
 dotenv.config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ----------------------------
-// Sécurité
+// Security headers
 app.use(helmet());
 
 // ----------------------------
-// Middlewares CORS / JSON
+// Middlewares
+app.use(express.json());
+
+// ⚠️ CORS pour front uniquement
 app.use(
   cors({
-    origin: ["https://wellshoppings.com"], // front autorisé
+    origin: ["https://wellshoppings.com"],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
 );
-app.use(express.json()); // pour tous les endpoints sauf Stripe webhook
 
 // ----------------------------
 // Firebase
@@ -38,7 +41,7 @@ const db = admin.firestore();
 app.get("/", (req, res) => res.send("Printful API + Payments running 🚀"));
 
 // ----------------------------
-// Import / récupération produits Printful
+// Import produits Printful
 app.get("/printful/import-products", async (req, res) => {
   try {
     const response = await axios.get("https://api.printful.com/store/products", {
@@ -50,7 +53,6 @@ app.get("/printful/import-products", async (req, res) => {
 
     for (const p of products) {
       const variantsArray = Array.isArray(p.variants) ? p.variants : [];
-
       const processedVariants = variantsArray.map((v) => ({
         id: v.id,
         size: v.size || "",
@@ -85,6 +87,8 @@ app.get("/printful/import-products", async (req, res) => {
   }
 });
 
+// ----------------------------
+// Endpoint pour récupérer produits
 app.get("/printful/products", async (req, res) => {
   try {
     const snapshot = await db.collection("PrintfulProducts").get();
@@ -98,11 +102,11 @@ app.get("/printful/products", async (req, res) => {
 
 // ----------------------------
 // Stripe
-let stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
+let stripe;
 app.post("/create-stripe-session", async (req, res) => {
-  const { items, email, adresseLivraison } = req.body;
+  if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+  const { items, email, adresseLivraison } = req.body;
   try {
     const line_items = items.map(i => ({
       price_data: {
@@ -117,7 +121,11 @@ app.post("/create-stripe-session", async (req, res) => {
       payment_method_types: ["card"],
       line_items,
       mode: "payment",
-      metadata: { items: JSON.stringify(items), email, adresseLivraison },
+      metadata: {
+        items: JSON.stringify(items),
+        email,
+        adresseLivraison,
+      },
       success_url: "https://wellshoppings.com/#/success",
       cancel_url: "https://wellshoppings.com/#/cancel",
     });
@@ -129,56 +137,50 @@ app.post("/create-stripe-session", async (req, res) => {
   }
 });
 
-// Webhook Stripe (OBLIGATOIRE express.raw)
-app.post(
-  "/stripe-webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    let event;
+// ----------------------------
+// Stripe webhook pour enregistrer la commande
+app.post("/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  let event;
+
+  if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error("Webhook signature error:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const items = JSON.parse(session.metadata.items || "[]");
+    const email = session.metadata.email || "";
+    const adresseLivraison = session.metadata.adresseLivraison || "";
 
     try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
+      await db.collection("commandes").add({
+        stripeSessionId: session.id,
+        email,
+        items,
+        adresseLivraison,
+        montant: session.amount_total / 100,
+        devise: session.currency.toUpperCase(),
+        statut: "payé",
+        date: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log("✅ Commande Stripe enregistrée dans Firestore");
     } catch (err) {
-      console.error("Webhook signature error:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      console.error("Erreur enregistrement Stripe:", err.message);
     }
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const items = JSON.parse(session.metadata.items || "[]");
-      const email = session.metadata.email || "";
-      const adresseLivraison = session.metadata.adresseLivraison || "";
-
-      try {
-        await db.collection("commandes").add({
-          stripeSessionId: session.id,
-          email,
-          items,
-          adresseLivraison,
-          montant: session.amount_total / 100,
-          devise: session.currency.toUpperCase(),
-          statut: "payé",
-          date: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        console.log("✅ Commande Stripe enregistrée dans Firestore");
-      } catch (err) {
-        console.error("Erreur enregistrement Stripe:", err.message);
-      }
-    }
-
-    res.json({ received: true });
   }
-);
+
+  res.json({ received: true });
+});
 
 // ----------------------------
-// PayPal
+// PayPal lazy init
 let paypalClient;
-
 app.post("/create-paypal-order", async (req, res) => {
   if (!paypalClient) {
     const env =
