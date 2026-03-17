@@ -1,8 +1,10 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import Stripe from "stripe";
 import admin from "firebase-admin";
 import paypal from "@paypal/checkout-server-sdk";
+import axios from "axios";
 import dotenv from "dotenv";
 import helmet from "helmet";
 
@@ -17,8 +19,7 @@ app.use(helmet());
 
 // ----------------------------
 // Middlewares
-app.use(express.json({ type: 'application/json' }));
-
+app.use(express.json());
 app.use(
   cors({
     origin: ["https://wellshoppings.com"],
@@ -34,24 +35,123 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 // ----------------------------
-// Racine
-app.get("/", (req, res) => res.send("Stripe & PayPal backend running 🚀"));
+// Racine simple
+app.get("/", (req, res) =>
+  res.send("Printful + Stripe + PayPal backend running 🚀")
+);
 
-// ----------------------------
-// Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+// ================= PRINTFUL =================
 
+// Import produits depuis Printful
+app.get("/printful/import-products", async (req, res) => {
+  try {
+    const PRINTFUL_API_KEY = process.env.PRINTFUL_API_KEY;
+    const response = await axios.get("https://api.printful.com/store/products", {
+      headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` },
+    });
+
+    const products = response.data.result || [];
+    const batch = db.batch();
+
+    for (const item of products) {
+      const details = await axios.get(
+        `https://api.printful.com/store/products/${item.id}`,
+        { headers: { Authorization: `Bearer ${PRINTFUL_API_KEY}` } }
+      );
+
+      const product = details.data.result;
+
+      const variants = (product.sync_variants || []).map((v) => {
+        let size = "";
+        let color = "N/A";
+
+        const options = v.options || [];
+        const sizeOption = options.find((o) => o.name?.toLowerCase().includes("size"));
+        const colorOption = options.find((o) => o.name?.toLowerCase().includes("color"));
+
+        if (sizeOption) size = sizeOption.value || "";
+        if (colorOption) color = colorOption.value || "N/A";
+
+        if (!size && v.size) size = v.size;
+        if (v.color) color = v.color;
+
+        if ((!size || size === "") && v.name) {
+          const parts = v.name.split(" / ");
+          if (parts.length >= 2) size = parts[1];
+          if (parts.length >= 3) color = parts[2];
+        }
+
+        const thumbnail =
+          v.files?.find((f) => f.type === "preview")?.preview_url ||
+          v.files?.[0]?.preview_url ||
+          product.sync_product?.thumbnail_url ||
+          null;
+
+        return {
+          id: v.id,
+          size,
+          color,
+          price: v.retail_price ? parseFloat(v.retail_price) : 0,
+          thumbnail,
+        };
+      });
+
+      const availableSizes = [...new Set(variants.map((v) => v.size).filter((s) => s && s !== ""))].sort();
+      const availableColors = [...new Set(variants.map((v) => v.color).filter((c) => c && c !== "N/A"))];
+
+      const price = variants[0]?.price || 0;
+      const thumbnail = variants[0]?.thumbnail || null;
+      const description = product.sync_product?.description || "Description non disponible";
+
+      const productData = {
+        id: item.id,
+        name: item.name,
+        description,
+        price,
+        thumbnail,
+        variants,
+        availableSizes,
+        availableColors,
+        source: "Printful",
+        syncDate: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      const ref = db.collection("PrintfulProducts").doc(item.id.toString());
+      batch.set(ref, productData);
+    }
+
+    await batch.commit();
+    res.json({ status: "ok", message: `${products.length} produits importés` });
+  } catch (err) {
+    console.error("Erreur import Printful:", err.message);
+    res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
+// API pour récupérer produits Printful
+app.get("/printful/products", async (req, res) => {
+  try {
+    const snapshot = await db.collection("PrintfulProducts").get();
+    const products = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    res.json({ products });
+  } catch (err) {
+    console.error("Erreur récupération produits:", err.message);
+    res.status(500).json({ products: [] });
+  }
+});
+
+// ================= STRIPE =================
+let stripe;
 app.post("/create-stripe-session", async (req, res) => {
+  if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
   const { items, email, adresseLivraison } = req.body;
 
   try {
     const line_items = items.map((i) => ({
       price_data: {
         currency: "eur",
-        product_data: {
-          name: i.nom,
-          images: [i.image || "/placeholder.png"],
-        },
+        product_data: { name: i.nom, images: [i.image || "/placeholder.png"] },
         unit_amount: i.prix * 100,
       },
       quantity: i.quantity,
@@ -61,11 +161,7 @@ app.post("/create-stripe-session", async (req, res) => {
       payment_method_types: ["card"],
       line_items,
       mode: "payment",
-      metadata: {
-        email,
-        adresseLivraison,
-        items: JSON.stringify(items),
-      },
+      metadata: { items: JSON.stringify(items), email, adresseLivraison },
       success_url: "https://wellshoppings.com/#/success",
       cancel_url: "https://wellshoppings.com/#/cancel",
     });
@@ -77,61 +173,14 @@ app.post("/create-stripe-session", async (req, res) => {
   }
 });
 
-// ----------------------------
-// Stripe webhook pour enregistrer la commande
-app.post("/stripe-webhook", express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error("Webhook signature error:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-
-    const items = JSON.parse(session.metadata.items || "[]");
-    const email = session.metadata.email || "";
-    const adresseLivraison = session.metadata.adresseLivraison || "";
-
-    try {
-      await db.collection("commandes").add({
-        stripeSessionId: session.id,
-        email,
-        montant: session.amount_total / 100,
-        devise: session.currency.toUpperCase(),
-        statut: "payé",
-        date: admin.firestore.FieldValue.serverTimestamp(),
-        items,
-        adresseLivraison,
-      });
-      console.log("✅ Commande Stripe enregistrée dans Firestore");
-    } catch (err) {
-      console.error("Erreur enregistrement Stripe:", err);
-    }
-  }
-
-  res.json({ received: true });
-});
-
-// ----------------------------
-// PayPal
+// ================= PAYPAL =================
 let paypalClient;
 app.post("/create-paypal-order", async (req, res) => {
   if (!paypalClient) {
     const env =
       process.env.PAYPAL_ENV === "live"
-        ? new paypal.core.LiveEnvironment(
-            process.env.PAYPAL_CLIENT_ID,
-            process.env.PAYPAL_SECRET
-          )
-        : new paypal.core.SandboxEnvironment(
-            process.env.PAYPAL_CLIENT_ID,
-            process.env.PAYPAL_SECRET
-          );
+        ? new paypal.core.LiveEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET)
+        : new paypal.core.SandboxEnvironment(process.env.PAYPAL_CLIENT_ID, process.env.PAYPAL_SECRET);
     paypalClient = new paypal.core.PayPalHttpClient(env);
   }
 
@@ -140,10 +189,7 @@ app.post("/create-paypal-order", async (req, res) => {
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
-  request.requestBody({
-    intent: "CAPTURE",
-    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
-  });
+  request.requestBody({ intent: "CAPTURE", purchase_units: [{ amount: { currency_code: "EUR", value: total } }] });
 
   try {
     const order = await paypalClient.execute(request);
@@ -180,6 +226,5 @@ app.post("/capture-paypal-order", async (req, res) => {
   }
 });
 
-// ----------------------------
-// Start server
-app.listen(PORT, () => console.log(`🚀 Backend payments running on port ${PORT}`));
+// ================= START SERVER =================
+app.listen(PORT, () => console.log(`🚀 Backend Printful + Payments running on port ${PORT}`));
