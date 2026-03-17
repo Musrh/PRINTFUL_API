@@ -16,14 +16,16 @@ const PORT = process.env.PORT || 3000;
 // ----------------------------
 // Sécurité et middlewares
 app.use(helmet());
-app.use(express.json());
+
+// ⚠️ Pour Stripe webhook, express.raw est utilisé plus bas
 app.use(
   cors({
-    origin: ["https://wellshoppings.com"], // front autorisé
+    origin: ["https://wellshoppings.com"],
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
 );
+app.use(express.json());
 
 // ----------------------------
 // Firebase
@@ -32,8 +34,8 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 // ----------------------------
-// Racine
-app.get("/", (req, res) => res.send("Printful API + Stripe & PayPal backend 🚀"));
+// Racine simple
+app.get("/", (req, res) => res.send("Printful API + Payments running 🚀"));
 
 // ----------------------------
 // Import produits Printful
@@ -48,7 +50,6 @@ app.get("/printful/import-products", async (req, res) => {
 
     for (const p of products) {
       const variantsArray = Array.isArray(p.variants) ? p.variants : [];
-
       const processedVariants = variantsArray.map((v) => ({
         id: v.id,
         size: v.size || "",
@@ -57,8 +58,8 @@ app.get("/printful/import-products", async (req, res) => {
         thumbnail: v.files?.[0]?.preview_url || null,
       }));
 
-      const availableSizes = [...new Set(processedVariants.map(v => v.size).filter(Boolean))];
-      const availableColors = [...new Set(processedVariants.map(v => v.color).filter(Boolean))];
+      const availableSizes = [...new Set(processedVariants.map(v => v.size).filter(s => s))];
+      const availableColors = [...new Set(processedVariants.map(v => v.color).filter(c => c))];
 
       const ref = db.collection("PrintfulProducts").doc(p.id.toString());
       batch.set(ref, {
@@ -84,7 +85,7 @@ app.get("/printful/import-products", async (req, res) => {
 });
 
 // ----------------------------
-// Récupération produits Printful
+// Récupérer produits
 app.get("/printful/products", async (req, res) => {
   try {
     const snapshot = await db.collection("PrintfulProducts").get();
@@ -99,10 +100,11 @@ app.get("/printful/products", async (req, res) => {
 // ----------------------------
 // Stripe
 let stripe;
-if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-
 app.post("/create-stripe-session", async (req, res) => {
+  if (!stripe) stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
   const { items, email, adresseLivraison } = req.body;
+
   try {
     const line_items = items.map(i => ({
       price_data: {
@@ -117,7 +119,11 @@ app.post("/create-stripe-session", async (req, res) => {
       payment_method_types: ["card"],
       line_items,
       mode: "payment",
-      metadata: { items: JSON.stringify(items), email, adresseLivraison },
+      metadata: {
+        items: JSON.stringify(items),
+        email,
+        adresseLivraison
+      },
       success_url: "https://wellshoppings.com/#/success",
       cancel_url: "https://wellshoppings.com/#/cancel",
     });
@@ -129,7 +135,8 @@ app.post("/create-stripe-session", async (req, res) => {
   }
 });
 
-// Webhook Stripe pour enregistrer les commandes
+// ----------------------------
+// Stripe webhook pour enregistrer la commande
 app.post("/stripe-webhook", express.raw({ type: "application/json" }), async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
@@ -137,7 +144,7 @@ app.post("/stripe-webhook", express.raw({ type: "application/json" }), async (re
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.error("Stripe webhook signature error:", err.message);
+    console.error("Webhook signature error:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
@@ -151,8 +158,8 @@ app.post("/stripe-webhook", express.raw({ type: "application/json" }), async (re
       await db.collection("commandes").add({
         stripeSessionId: session.id,
         email,
-        items,
         adresseLivraison,
+        items,
         montant: session.amount_total / 100,
         devise: session.currency.toUpperCase(),
         statut: "payé",
@@ -183,7 +190,10 @@ app.post("/create-paypal-order", async (req, res) => {
 
   const request = new paypal.orders.OrdersCreateRequest();
   request.prefer("return=representation");
-  request.requestBody({ intent: "CAPTURE", purchase_units: [{ amount: { currency_code: "EUR", value: total } }] });
+  request.requestBody({
+    intent: "CAPTURE",
+    purchase_units: [{ amount: { currency_code: "EUR", value: total } }],
+  });
 
   try {
     const order = await paypalClient.execute(request);
@@ -226,4 +236,4 @@ app.post("/capture-paypal-order", async (req, res) => {
 
 // ----------------------------
 // Start server
-app.listen(PORT, () => console.log(`🚀 Printful + Stripe & PayPal backend running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Printful API + Payments running on port ${PORT}`));
